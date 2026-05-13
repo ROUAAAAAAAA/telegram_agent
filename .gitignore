@@ -1,0 +1,18 @@
+# Environment variables - NEVER commit these
+.env
+.env.*
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Firebase service account key
+firebase*.json
+serviceAccount*.json
+*-firebase-adminsdk*.json
