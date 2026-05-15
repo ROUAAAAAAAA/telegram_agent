@@ -1,6 +1,4 @@
-"""
-config.py — All settings loaded from .env via pydantic-settings.
-"""
+
 from pydantic_settings import BaseSettings
 
 
@@ -29,6 +27,13 @@ class Settings(BaseSettings):
     # ── LinkedIn ──────────────────────────────────────────────────────────────
     linkedin_access_token: str = ""
     linkedin_person_urn: str = ""
+
+    # ── Firebase (Firestore only) ───────────────────────────────────────────────
+    firebase_service_account_path: str = "firebase-service-account.json"
+
+    # ── Website image upload (terrasol.tn) ────────────────────────────────────
+    website_upload_url: str = ""   # e.g. https://terrasol.tn/api/upload.php
+    website_upload_token: str = ""
 
     class Config:
         env_file = ".env"

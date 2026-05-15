@@ -33,10 +33,10 @@ def get_or_create_session(user_id: str) -> dict:
         return session
     session = {
         "user_id": str(user_id),
-        "messages": [],          # [{"role": "user"|"model", "text": "..."}]
-        "pending_media": [],     # [{"type": "voice"|"image", "file_id": "..."}]
-        "image_file_ids": [],    # all image file_ids seen — persisted across turns
-        "last_preview": None,    # last preview_content payload dict
+        "messages": [],          
+        "pending_media": [],    
+        "image_file_ids": [],   
+        "last_preview": None,    
         "publish_ready": False,
     }
     _save(user_id, session)

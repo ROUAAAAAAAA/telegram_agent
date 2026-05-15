@@ -16,3 +16,4 @@ build/
 firebase*.json
 serviceAccount*.json
 *-firebase-adminsdk*.json
+test_*.py

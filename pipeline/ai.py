@@ -1,10 +1,12 @@
 
-
 import asyncio
 import httpx
 import logging
 import json
 import base64
+
+import openai
+from openai import AsyncOpenAI
 
 from config import settings
 from pipeline.publishers import (
@@ -16,15 +18,15 @@ from pipeline.session import set_last_preview, mark_published, get_session
 
 logger = logging.getLogger(__name__)
 
+
+
 MODEL = "google/gemini-3-flash-preview"
 
-from openai import AsyncOpenAI
 
 _client = AsyncOpenAI(
     api_key=settings.openrouter_api_key,
     base_url="https://openrouter.ai/api/v1",
     default_headers={
-        "Authorization": f"Bearer {settings.openrouter_api_key}",  
         "HTTP-Referer": "http://localhost:8080",
         "X-Title": "Terrasol Agent",
     },
@@ -173,7 +175,7 @@ TOOLS = [
 ]
 
 
-
+# ── Media helpers ─────────────────────────────────────────────────────────────
 
 async def _download(file_id: str) -> tuple[bytes, str]:
     async with httpx.AsyncClient(timeout=30) as http:
@@ -203,13 +205,7 @@ async def _fetch_media_content(media_type: str, file_id: str) -> dict | None:
         data, path = await _download(file_id)
         mime = _mime(path, media_type)
         b64 = base64.b64encode(data).decode("utf-8")
-        if media_type == "image":
-            return {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{b64}"},
-            }
-        elif media_type == "voice":
-            # OpenRouter/Gemini: send audio as base64 image_url with audio mime
+        if media_type in ("image", "voice"):
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime};base64,{b64}"},
@@ -223,7 +219,7 @@ async def _fetch_media_content(media_type: str, file_id: str) -> dict | None:
 # ── Session state block ───────────────────────────────────────────────────────
 
 def _session_state_block(session: dict) -> str:
-    image_ids = session.get("image_file_ids", [])
+    image_ids    = session.get("image_file_ids", [])
     last_preview = session.get("last_preview")
     lines = [
         "<session_state>",
@@ -276,7 +272,9 @@ def _is_confirm(text: str | None) -> bool:
 
 # ── Tool executor ─────────────────────────────────────────────────────────────
 
-async def _execute_tool(name: str, inputs: dict, image_file_ids: list[str], user_id: str) -> tuple[str, str | None]:
+async def _execute_tool(
+    name: str, inputs: dict, image_file_ids: list[str], user_id: str
+) -> tuple[str, str | None]:
     if name == "preview_content":
         set_last_preview(user_id, inputs)
         preview = (
@@ -293,27 +291,63 @@ async def _execute_tool(name: str, inputs: dict, image_file_ids: list[str], user
         return "Preview sent to user successfully.", preview
 
     elif name == "publish_facebook":
-        ids = inputs.get("image_file_ids") or image_file_ids
-        result = await _pub_facebook(text=inputs["text"], image_file_ids=ids, bot_token=settings.telegram_bot_token)
+        ids    = inputs.get("image_file_ids") or image_file_ids
+        result = await _pub_facebook(
+            text=inputs["text"], image_file_ids=ids,
+            bot_token=settings.telegram_bot_token,
+        )
         mark_published(user_id)
         return str(result), None
 
     elif name == "publish_linkedin":
-        ids = inputs.get("image_file_ids") or image_file_ids
-        result = await _pub_linkedin(text=inputs["text"], image_file_ids=ids, bot_token=settings.telegram_bot_token)
+        ids    = inputs.get("image_file_ids") or image_file_ids
+        result = await _pub_linkedin(
+            text=inputs["text"], image_file_ids=ids,
+            bot_token=settings.telegram_bot_token,
+        )
         mark_published(user_id)
         return str(result), None
 
     elif name == "publish_website":
-        ids = inputs.get("image_file_ids") or image_file_ids
-        result = await _pub_website(caption=inputs["caption"], full_content=inputs["full_content"], image_file_ids=ids, bot_token=settings.telegram_bot_token)
+        ids    = inputs.get("image_file_ids") or image_file_ids
+        result = await _pub_website(
+            caption=inputs["caption"],
+            full_content=inputs["full_content"],
+            image_file_ids=ids,
+            bot_token=settings.telegram_bot_token,
+        )
         mark_published(user_id)
         return str(result), None
 
     return f"Unknown tool: {name}", None
 
 
-# ── Main agent turn ───────────────────────────────────────────────────────────
+
+def _format_publish_result(result_str: str, tool_name: str) -> str | None:
+    """Parse a publish result dict and return a human-readable Telegram message."""
+    try:
+        res = json.loads(result_str.replace("'", '"'))
+    except Exception:
+        return None
+
+    platform = res.get("platform", tool_name.replace("publish_", ""))
+    status   = res.get("status", "?")
+    post_id  = res.get("post_id", "")
+    url      = res.get("url", "")
+    reason   = res.get("reason", "")
+
+    if status == "ok":
+        msg = f" {platform.capitalize()} published\nPost ID: {post_id}"
+        if url:
+            msg += f"\nLink: {url}"
+    else:
+        msg = f" {platform.capitalize()} failed ({status})"
+        if reason:
+            msg += f"\nReason: {reason}"
+    return msg
+
+
+
 
 async def run_agent_turn(
     user_text: str | None,
@@ -325,7 +359,7 @@ async def run_agent_turn(
     session: dict,
 ) -> list[dict]:
     """
-    Run one agent turn using OpenRouter (google/gemini-2.5-flash).
+    Run one agent turn using OpenRouter 
 
     `messages` is a simple list of {"role": "user"|"model", "text": "..."} dicts.
     Images are re-fetched from Telegram each turn — no blobs in Redis.
@@ -333,7 +367,6 @@ async def run_agent_turn(
     Returns the updated messages list for Redis.
     """
     import time as _time
-    import re as _re
     _turn_start = _time.time()
     logger.info(
         f"[TURN START] user={user_id} | key={_key_preview} | "
@@ -341,7 +374,7 @@ async def run_agent_turn(
         f"image_file_ids={len(image_file_ids)} | history_msgs={len(messages)}"
     )
 
-    # Build session state
+    # Build session state block
     state = _session_state_block(session)
     logger.debug(f"Session state injected:\n{state}")
 
@@ -352,7 +385,7 @@ async def run_agent_turn(
     media_contents = [c for c in media_contents if c is not None]
 
     # Build current user message content
-    current_user_content = [{"type": "text", "text": state}]
+    current_user_content: list[dict] = [{"type": "text", "text": state}]
     current_user_content.extend(media_contents)
     if user_text:
         current_user_content.append({"type": "text", "text": user_text})
@@ -360,14 +393,14 @@ async def run_agent_turn(
         current_user_content.append({"type": "text", "text": "(no message)"})
 
     # Full messages list for the API
-    api_messages = (
+    api_messages: list[dict] = (
         [{"role": "system", "content": SYSTEM}]
         + _history_to_messages(messages)
         + [{"role": "user", "content": current_user_content}]
     )
 
-    # Re-read session for live publish_ready state
-    live_session = get_session(user_id) or session
+    # Re-read live session for publish_ready state
+    live_session   = get_session(user_id) or session
     is_confirmation = _is_confirm(user_text) and live_session.get("publish_ready", False)
     logger.info(
         f"[CONFIRM CHECK] _is_confirm={_is_confirm(user_text)} | "
@@ -385,50 +418,52 @@ async def run_agent_turn(
     ])) or "(no message)"
     new_messages = messages + [{"role": "user", "text": user_text_for_history}]
 
-    # ── Confirmation shortcut ─────────────────────────────────────────────────
+    # ── Confirmation shortcut  ────────────────────────────
     if is_confirmation:
         last_preview = session.get("last_preview")
         if last_preview:
             logger.info("Confirmation shortcut: publishing directly without model call")
             publish_tasks = [
-                ("publish_facebook", {"text": last_preview["facebook"], "image_file_ids": image_file_ids}),
-                ("publish_linkedin", {"text": last_preview["linkedin"], "image_file_ids": image_file_ids}),
-                ("publish_website",  {"caption": last_preview["caption"], "full_content": last_preview["website"], "image_file_ids": image_file_ids}),
+                ("publish_facebook", {
+                    "text": last_preview["facebook"],
+                    "image_file_ids": image_file_ids,
+                }),
+                ("publish_linkedin", {
+                    "text": last_preview["linkedin"],
+                    "image_file_ids": image_file_ids,
+                }),
+                ("publish_website", {
+                    "caption":      last_preview["caption"],
+                    "full_content": last_preview["website"],
+                    "image_file_ids": image_file_ids,
+                }),
             ]
             for tool_name, inputs in publish_tasks:
                 logger.info(f"Executing tool: {tool_name}")
                 try:
-                    result_str, _ = await _execute_tool(tool_name, inputs, image_file_ids, user_id)
+                    result_str, _ = await _execute_tool(
+                        tool_name, inputs, image_file_ids, user_id
+                    )
                 except Exception as e:
-                    result_str = str({"platform": tool_name.replace("publish_", ""), "status": "error", "reason": str(e)})
+                    result_str = str({
+                        "platform": tool_name.replace("publish_", ""),
+                        "status": "error",
+                        "reason": str(e),
+                    })
 
-                try:
-                    res = json.loads(result_str.replace("'", '"')) if result_str.startswith("{") else None
-                except Exception:
-                    res = None
-                if res:
-                    platform = res.get("platform", tool_name)
-                    status   = res.get("status", "?")
-                    post_id  = res.get("post_id", "")
-                    url      = res.get("url", "")
-                    reason   = res.get("reason", "")
-                    if status == "ok":
-                        msg = f" {platform.capitalize()} published\nPost ID: {post_id}"
-                        if url:
-                            msg += f"\nLink: {url}"
-                    else:
-                        msg = f" {platform.capitalize()} failed ({status})"
-                        if reason:
-                            msg += f"\nReason: {reason}"
+                msg = _format_publish_result(result_str, tool_name)
+                if msg:
                     try:
                         await send_message_fn(msg)
                     except Exception as e:
                         logger.error(f"Failed to send publish result: {e}")
 
-            new_messages = new_messages + [{"role": "model", "text": "Published to all platforms."}]
+            new_messages = new_messages + [
+                {"role": "model", "text": "Published to all platforms."}
+            ]
             return new_messages
 
-    
+    # ── LLM agentic loop ─────────────────────────────────────────────────────
     MAX_LOOP_ITERATIONS = 4
 
     for _loop_iter in range(MAX_LOOP_ITERATIONS):
@@ -439,7 +474,10 @@ async def run_agent_turn(
         _last_exc = None
         for _attempt in range(2):
             try:
-                logger.debug(f"OpenRouter call at {_time.time():.3f} (loop={_loop_iter} attempt={_attempt})")
+                logger.debug(
+                    f"OpenRouter call at {_time.time():.3f} "
+                    f"(loop={_loop_iter} attempt={_attempt})"
+                )
                 response = await _client.chat.completions.create(
                     model=MODEL,
                     messages=api_messages,
@@ -451,11 +489,15 @@ async def run_agent_turn(
                 break
             except openai.RateLimitError as _exc:
                 _last_exc = _exc
+                import re as _re
                 _wait = 30
                 _delay_match = _re.search(r"(\d+)s", str(_exc))
                 if _delay_match:
                     _wait = int(_delay_match.group(1)) + 2
-                logger.warning(f"[429] Rate limited loop={_loop_iter} attempt={_attempt} | waiting {_wait}s")
+                logger.warning(
+                    f"[429] Rate limited loop={_loop_iter} attempt={_attempt} "
+                    f"| waiting {_wait}s"
+                )
                 await asyncio.sleep(_wait)
             except Exception as _exc:
                 _last_exc = _exc
@@ -465,22 +507,33 @@ async def run_agent_turn(
         if _last_exc is not None:
             raise _last_exc
 
-        choice = response.choices[0]
-        message = choice.message
+        choice     = response.choices[0]
+        message    = choice.message
         tool_calls = message.tool_calls or []
         text_reply = (message.content or "").strip()
 
         logger.info(
             f"[OPENROUTER RESPONSE] loop={_loop_iter} | finish={choice.finish_reason} | "
             f"text_len={len(text_reply)} tool_calls={len(tool_calls)} | "
-            f"tokens: in={response.usage.prompt_tokens} out={response.usage.completion_tokens}"
+            f"tokens: in={response.usage.prompt_tokens} "
+            f"out={response.usage.completion_tokens}"
         )
 
-        # Append assistant message to api_messages for next iteration
-        api_messages.append({"role": "assistant", "content": message.content, "tool_calls": [
-            {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
-            for tc in tool_calls
-        ] if tool_calls else None})
+        
+        assistant_msg: dict = {"role": "assistant", "content": message.content or ""}
+        if tool_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ]
+        api_messages.append(assistant_msg)
 
         if text_reply:
             try:
@@ -492,13 +545,19 @@ async def run_agent_turn(
             if text_reply:
                 new_messages = new_messages + [{"role": "model", "text": text_reply}]
             else:
-                logger.warning(f"[EMPTY RESPONSE] loop={_loop_iter} finish={choice.finish_reason}")
-                empty_msg = "Je n'ai pas pu traiter ce message. Si c'est un message vocal, essayez de le renvoyer ou décrivez votre demande par écrit."
+                logger.warning(
+                    f"[EMPTY RESPONSE] loop={_loop_iter} finish={choice.finish_reason}"
+                )
+                empty_msg = (
+                    "Je n'ai pas pu traiter ce message. "
+                    "Si c'est un message vocal, essayez de le renvoyer "
+                    "ou décrivez votre demande par écrit."
+                )
                 await send_message_fn(empty_msg)
                 new_messages = new_messages + [{"role": "model", "text": empty_msg}]
             break
 
-        # Execute tools and append results
+        
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -507,7 +566,9 @@ async def run_agent_turn(
                 inputs = {}
             logger.info(f"Executing tool: {name}")
             try:
-                result_str, preview_text = await _execute_tool(name, inputs, image_file_ids, user_id)
+                result_str, preview_text = await _execute_tool(
+                    name, inputs, image_file_ids, user_id
+                )
             except Exception as e:
                 logger.error(f"Tool {name} failed: {e}")
                 result_str, preview_text = f"Tool error: {e}", None
@@ -520,34 +581,17 @@ async def run_agent_turn(
                     logger.error(f"Failed to send preview: {e}")
 
             if name in ("publish_facebook", "publish_linkedin", "publish_website"):
-                try:
-                    res = json.loads(result_str.replace("'", '"')) if result_str.startswith("{") else None
-                except Exception:
-                    res = None
-                if res:
-                    platform = res.get("platform", name)
-                    status   = res.get("status", "?")
-                    post_id  = res.get("post_id", "")
-                    url      = res.get("url", "")
-                    reason   = res.get("reason", "")
-                    if status == "ok":
-                        msg = f" {platform.capitalize()} published\nPost ID: {post_id}"
-                        if url:
-                            msg += f"\nLink: {url}"
-                    else:
-                        msg = f" {platform.capitalize()} failed ({status})"
-                        if reason:
-                            msg += f"\nReason: {reason}"
+                msg = _format_publish_result(result_str, name)
+                if msg:
                     try:
                         await send_message_fn(msg)
                     except Exception as e:
                         logger.error(f"Failed to send publish result: {e}")
 
-            # Append tool result to api_messages
             api_messages.append({
-                "role": "tool",
+                "role":         "tool",
                 "tool_call_id": tc.id,
-                "content": result_str,
+                "content":      result_str,
             })
 
     logger.info(
