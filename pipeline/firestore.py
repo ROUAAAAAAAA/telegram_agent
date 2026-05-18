@@ -25,14 +25,22 @@ def _init_firebase():
     if _app is not None:
         return
 
-    sa_path = Path(settings.firebase_service_account_path)
-    if not sa_path.exists():
-        raise FileNotFoundError(
-            f"Firebase service account key not found at: {sa_path.resolve()}\n"
-            "Download it from Firebase Console → Project Settings → Service Accounts"
-        )
+    if settings.firebase_service_account_json:
+        import json
+        try:
+            info = json.loads(settings.firebase_service_account_json)
+            cred = credentials.Certificate(info)
+        except Exception as e:
+            raise ValueError(f"Failed to parse firebase_service_account_json env var: {e}")
+    else:
+        sa_path = Path(settings.firebase_service_account_path)
+        if not sa_path.exists():
+            raise FileNotFoundError(
+                f"Firebase service account key not found at: {sa_path.resolve()}\n"
+                "Download it from Firebase Console → Project Settings → Service Accounts"
+            )
+        cred = credentials.Certificate(str(sa_path))
 
-    cred = credentials.Certificate(str(sa_path))
     _app = firebase_admin.initialize_app(cred)
     _db = firestore.client()
 

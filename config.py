@@ -30,6 +30,7 @@ class Settings(BaseSettings):
 
     # ── Firebase (Firestore only) ───────────────────────────────────────────────
     firebase_service_account_path: str = "firebase-service-account.json"
+    firebase_service_account_json: str = ""
 
     # ── Website image upload (terrasol.tn) ────────────────────────────────────
     website_upload_url: str = ""   # e.g. https://terrasol.tn/api/upload.php
