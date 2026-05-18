@@ -1,10 +1,4 @@
-"""
-session.py — Redis-backed session store.
 
-Messages are stored as simple {"role": "user"|"model", "text": "..."} dicts.
-Images are stored as file_ids only — re-fetched from Telegram each turn.
-No base64 blobs, no Part objects, no serialization complexity.
-"""
 
 import json
 import redis
