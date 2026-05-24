@@ -79,3 +79,12 @@ def clear_pending_media(user_id: str) -> dict:
 
 def delete_session(user_id: str):
     _redis.delete(_key(user_id))
+
+
+def reset_after_publish(user_id: str):
+    """
+    Called after a successful publish. Wipes the full session so the next
+    conversation starts clean. This prevents old messages, images, and
+    previews from bleeding into a new post.
+    """
+    _redis.delete(_key(user_id))

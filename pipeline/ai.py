@@ -14,7 +14,7 @@ from pipeline.publishers import (
     publish_linkedin as _pub_linkedin,
     publish_website  as _pub_website,
 )
-from pipeline.session import set_last_preview, mark_published, get_session
+from pipeline.session import set_last_preview, mark_published, get_session, reset_after_publish
 
 logger = logging.getLogger(__name__)
 
@@ -296,7 +296,7 @@ async def _execute_tool(
             text=inputs["text"], image_file_ids=ids,
             bot_token=settings.telegram_bot_token,
         )
-        mark_published(user_id)
+        reset_after_publish(user_id)
         return str(result), None
 
     elif name == "publish_linkedin":
@@ -305,7 +305,7 @@ async def _execute_tool(
             text=inputs["text"], image_file_ids=ids,
             bot_token=settings.telegram_bot_token,
         )
-        mark_published(user_id)
+        reset_after_publish(user_id)
         return str(result), None
 
     elif name == "publish_website":
@@ -316,7 +316,7 @@ async def _execute_tool(
             image_file_ids=ids,
             bot_token=settings.telegram_bot_token,
         )
-        mark_published(user_id)
+        reset_after_publish(user_id)
         return str(result), None
 
     return f"Unknown tool: {name}", None
@@ -461,6 +461,12 @@ async def run_agent_turn(
             new_messages = new_messages + [
                 {"role": "model", "text": "Published to all platforms."}
             ]
+            # ✅ Wipe session so the next post starts clean
+            reset_after_publish(user_id)
+            try:
+                await send_message_fn("✅ Done! What would you like to post next?")
+            except Exception as e:
+                logger.error(f"Failed to send closing message: {e}")
             return new_messages
 
     # ── LLM agentic loop ─────────────────────────────────────────────────────
