@@ -211,7 +211,7 @@ async def publish_linkedin(text: str, image_file_ids: list[str], bot_token: str)
         return {"platform": "linkedin", "status": "dry_run", "post_id": "fake-li-456"}
 
     token     = settings.linkedin_access_token
-    owner_urn = settings.linkedin_person_urn
+    owner_urn = settings.linkedin_owner_urn
 
     if not token or not owner_urn:
         return {

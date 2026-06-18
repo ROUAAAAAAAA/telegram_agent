@@ -26,7 +26,7 @@ class Settings(BaseSettings):
 
     # ── LinkedIn ──────────────────────────────────────────────────────────────
     linkedin_access_token: str = ""
-    linkedin_person_urn: str = ""
+    linkedin_owner_urn: str = ""
 
     # ── Firebase (Firestore only) ───────────────────────────────────────────────
     firebase_service_account_path: str = "firebase-service-account.json"

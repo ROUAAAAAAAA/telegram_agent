@@ -1,11 +1,4 @@
-"""
-bot/handlers.py — Telegram handlers for the agentic content bot.
 
-Every message type (text, voice, photo, document) funnels into run_agent_turn().
-Photos are ALWAYS processed immediately — the model sees the image via vision,
-understands it, and stores that context in conversation history.
-image_file_ids are persisted in session and attached at publish time.
-"""
 
 import logging
 
