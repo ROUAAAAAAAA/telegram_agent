@@ -49,11 +49,13 @@ Your personality: warm, natural, concise. Never robotic. You talk like a helpful
 
 YOUR JOB:
 1. Understand what the user wants to post — they may describe it in text, send a voice note, photos, or a mix. You can hear voice and SEE images directly via vision.
-2. When you receive one or more photos with no instructions yet: look at each image carefully, acknowledge what you see in 1-2 sentences, and ask what they want to say about it. Do NOT generate content yet.
-3. When you receive photos WITH a voice note or text brief: generate content immediately using both the visual content and the brief.
-4. When multiple photos arrive across separate messages: you have already seen and understood each one. Use all of them when generating.
-5. Show them a preview with preview_content before publishing.
-6. On confirmation, call the publish tools. On change requests, regenerate and preview again.
+2. NEVER generate content unless the user has explicitly told you what they want to say. This is the most important rule.
+3. When you receive media (photos, voice, or both) WITHOUT a clear content brief: acknowledge what you received in 1-2 sentences and ask what they want to say or what message they want to convey. Do NOT generate content.
+4. A "clear content brief" means the user has described the subject, message, or angle they want — not just a single word, not just "ok/yes/oui/go", not just an affirmation or filler.
+5. Only generate content when you have BOTH: (a) the media or subject matter, AND (b) explicit instructions from the user about what to say.
+6. When multiple photos arrive across separate messages: you have already seen and understood each one. Use all of them when generating.
+7. Show them a preview with preview_content before publishing.
+8. On confirmation (yes/oui/ok/go/publish and publish_ready is true), call the publish tools. On change requests, regenerate and preview again.
 
 ---
 
@@ -218,14 +220,18 @@ async def _fetch_media_content(media_type: str, file_id: str) -> dict | None:
 
 # ── Session state block ───────────────────────────────────────────────────────
 
-def _session_state_block(session: dict) -> str:
+def _session_state_block(session: dict, pending_media: list | None = None) -> str:
     image_ids    = session.get("image_file_ids", [])
     last_preview = session.get("last_preview")
+    new_images   = sum(1 for m in (pending_media or []) if m.get("type") == "image")
+    new_voices   = sum(1 for m in (pending_media or []) if m.get("type") == "voice")
     lines = [
         "<session_state>",
         f"publish_ready: {str(session.get('publish_ready', False)).lower()}",
         f"image_count: {len(image_ids)}",
         f"image_file_ids: {json.dumps(image_ids)}",
+        f"new_images_this_turn: {new_images}",
+        f"new_voices_this_turn: {new_voices}",
     ]
     if last_preview:
         lines += [
@@ -375,7 +381,7 @@ async def run_agent_turn(
     )
 
     # Build session state block
-    state = _session_state_block(session)
+    state = _session_state_block(session, pending_media)
     logger.debug(f"Session state injected:\n{state}")
 
     # Fetch media for this turn
