@@ -56,6 +56,7 @@ YOUR JOB:
 6. When multiple photos arrive across separate messages: you have already seen and understood each one. Use all of them when generating.
 7. Show them a preview with preview_content before publishing.
 8. On confirmation (yes/oui/ok/go/publish and publish_ready is true), call the publish tools. On change requests, regenerate and preview again.
+9. If a publish fails, the session stays alive (publish_ready remains true, last_preview is intact). When the user says "try again" or "retry", call the publish tools again immediately using last_preview — do NOT ask questions, do NOT regenerate content.
 
 ---
 
@@ -267,6 +268,7 @@ CONFIRM_PHRASES = {
     "all three", "all 3", "all", "les trois", "tout", "tout publier",
     "yes publish", "yes let us publish", "yes let's publish",
     "facebook", "linkedin", "website",
+    "try again", "retry", "réessayer", "réessaie", "ressaie", "again",
 }
 
 def _is_confirm(text: str | None) -> bool:
@@ -302,7 +304,6 @@ async def _execute_tool(
             text=inputs["text"], image_file_ids=ids,
             bot_token=settings.telegram_bot_token,
         )
-        reset_after_publish(user_id)
         return str(result), None
 
     elif name == "publish_linkedin":
@@ -311,7 +312,6 @@ async def _execute_tool(
             text=inputs["text"], image_file_ids=ids,
             bot_token=settings.telegram_bot_token,
         )
-        reset_after_publish(user_id)
         return str(result), None
 
     elif name == "publish_website":
@@ -322,11 +322,17 @@ async def _execute_tool(
             image_file_ids=ids,
             bot_token=settings.telegram_bot_token,
         )
-        reset_after_publish(user_id)
         return str(result), None
 
     return f"Unknown tool: {name}", None
 
+
+
+def _parse_status(result_str: str) -> str:
+    try:
+        return json.loads(result_str.replace("'", '"')).get("status", "error")
+    except Exception:
+        return "error"
 
 
 def _format_publish_result(result_str: str, tool_name: str) -> str | None:
@@ -444,6 +450,7 @@ async def run_agent_turn(
                     "image_file_ids": image_file_ids,
                 }),
             ]
+            results = []
             for tool_name, inputs in publish_tasks:
                 logger.info(f"Executing tool: {tool_name}")
                 try:
@@ -456,7 +463,7 @@ async def run_agent_turn(
                         "status": "error",
                         "reason": str(e),
                     })
-
+                results.append((tool_name, result_str))
                 msg = _format_publish_result(result_str, tool_name)
                 if msg:
                     try:
@@ -464,16 +471,30 @@ async def run_agent_turn(
                     except Exception as e:
                         logger.error(f"Failed to send publish result: {e}")
 
-            new_messages = new_messages + [
-                {"role": "model", "text": "Published to all platforms."}
-            ]
-            # ✅ Wipe session so the next post starts clean
-            reset_after_publish(user_id)
-            try:
-                await send_message_fn("✅ Done! What would you like to post next?")
-            except Exception as e:
-                logger.error(f"Failed to send closing message: {e}")
-            return new_messages
+            all_ok = all(
+                _parse_status(r) in ("ok", "dry_run") for _, r in results
+            )
+
+            if all_ok:
+                # Full success — wipe session and return original messages so
+                # append_messages writes nothing to the fresh clean session.
+                reset_after_publish(user_id)
+                try:
+                    await send_message_fn("✅ Done! What would you like to post next?")
+                except Exception as e:
+                    logger.error(f"Failed to send closing message: {e}")
+                return messages  # empty diff → append_messages won't pollute fresh session
+
+            else:
+                # At least one platform failed — keep session alive so user can retry.
+                failed = [t.replace("publish_", "") for t, r in results if _parse_status(r) not in ("ok", "dry_run")]
+                retry_msg = f"❌ Failed: {', '.join(failed)}. Say 'try again' to retry."
+                try:
+                    await send_message_fn(retry_msg)
+                except Exception as e:
+                    logger.error(f"Failed to send retry message: {e}")
+                new_messages = new_messages + [{"role": "model", "text": retry_msg}]
+                return new_messages
 
     # ── LLM agentic loop ─────────────────────────────────────────────────────
     MAX_LOOP_ITERATIONS = 4
